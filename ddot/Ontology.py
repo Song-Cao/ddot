@@ -3244,13 +3244,36 @@ class Ontology(object):
         
         def louvain_multiplex(graphs, partition_type, interslice_weight, resolution_parameter):
             layers, interslice_layer, G_full = louvain.time_slices_to_layers(graphs, vertex_id_attr='name', interslice_weight=interslice_weight)
-            partitions = [partition_type(H, resolution_parameter) for H in layers]
-            interslice_partition = partition_type(interslice_layer, resolution_parameter, weights='weight')
+            for i in layers:
+                print(type(i))
+            if partition_type == louvain.ModularityVertexPartition:
+                partitions = [partition_type(H) for H in layers]
+                interslice_partition = partition_type(interslice_layer, weights='weight')
+            else:
+                partitions = [partition_type(H, resolution_parameter=resolution_parameter) for H in layers]
+                interslice_partition = partition_type(interslice_layer, resolution_parameter=resolution_parameter, weights='weight')
             optimiser = louvain.Optimiser()
             optimiser.optimise_partition_multiplex(partitions + [interslice_partition])
             quality = sum([p.quality() for p in partitions + [interslice_partition]])
             return partitions[0], quality
 
+        def partition_to_clust(graphs, partition, min_size_cut=2):
+            clusts = []
+            node_names = []
+            if not isinstance(graphs, list):
+                graphs = [graphs]
+            for g in graphs:
+                node_names.extend(g.vs['name'])
+            for i in range(len(partition)):
+                clust = [node_names[id] for id in partition[i]]
+                clust = list(set(clust))
+                if len(clust) < min_size_cut:
+                    continue
+                clust.sort()
+                clusts.append(clust)
+            clusts = sorted(clusts, key=lambda x: len(x), reverse=True)
+            return clusts
+        
         multi = False
         if isinstance(graph, list):
             multi = True
@@ -3306,54 +3329,61 @@ class Ontology(object):
             if partition_type == louvain.SignificanceVertexPartition and weighted == True:
                 raise Exception('SignificanceVertexPartition only support unweighted graphs')
             partition, quality = louvain_multiplex(G, partition_type, interslice_weight, resolution_parameter)
+            
 
         else:
             with open(graph, 'r') as f: 
                 lines = f.read().splitlines()
-            Node2Index = {}
+            #Node2Index = {}
             elts = lines[0].split()
             if len(elts) == 3:
                 weighted = True
             else:
                 weighted = False
-            index = 0
+            #index = 0
             for i in range(len(lines)):
                 elts = lines[i].split()
                 for j in range(2):
                     elts[j] = int(elts[j])
-                    if elts[j] not in Node2Index :
-                        Node2Index[elts[j]] = index
-                        index += 1
+                    #if elts[j] not in Node2Index :
+                        #Node2Index[elts[j]] = index
+                        #index += 1
                 if weighted == True:
                     elts[2] = float(elts[2])
                 lines[i] = tuple(elts)
-            Index2Node = {}
-            for node in Node2Index:
-                Index2Node[Node2Index[node]] = node
+            #Index2Node = {}
+            #for node in Node2Index:
+                #Index2Node[Node2Index[node]] = node
             f.close()
             G = igraph.Graph.TupleList(lines, directed=directed, weights=weighted)
             if weighted == False:
                 weights = None
             else:
                 weights = G.es['weight']
-            partition = louvain.find_partition(G,partition_type, weights=weights, resolution_parameter = resolution_parameter)
+            if partition_type == louvain.ModularityVertexPartition:
+                partition = louvain.find_partition(G,partition_type, weights=weights)
+            else:
+                partition = louvain.find_partition(G,partition_type, weights=weights, resolution_parameter = resolution_parameter)
             optimiser = louvain.Optimiser()
             optimiser.optimise_partition(partition)
             # quality = partition.quality()
                 
-
-        if len(partition) == 0:
+        clusts = partition_to_clust(G, partition)
+        if len(clusts) == 0:
             print("No cluster; Resolution parameter may be too extreme")
             return
         
-        maxNode = max(list(Node2Index.keys()))
+        #maxNode = max(list(Node2Index.keys()))
+        maxNode = 0
+        for clust in clusts:
+            maxNode = max(maxNode, max(clust))
         if outdir[-1] in ["/","\\","\\"+"\\"]:
             outdir = outdir[:-1]
         wfile = open(outdir + '/tree.txt', 'w')
-        for i in range(len(partition)):
-            wfile.write(str(maxNode+len(partition)+1) + '\t' + str(maxNode+i+1) + '\t' + 'term-term' + '\n')
-            for n in partition[i]:
-                wfile.write(str(maxNode+i+1) + '\t' + str(Index2Node[n]) + '\t' + 'term-gene' + '\n')
+        for i in range(len(clusts)):
+            wfile.write(str(maxNode+len(partition)+1) + '\t' + str(maxNode+i+1) + '\t' + 'c-c' + '\n')
+            for n in clusts[i]:
+                wfile.write(str(maxNode+i+1) + '\t' + str(n) + '\t' + 'c-g' + '\n')
         wfile.close()      
     
         return
@@ -3449,15 +3479,15 @@ class Ontology(object):
             
         edges = set()
         for i in range(A.shape[0]):
-            edges.add((int(root), int(A[i,0]), 't-t'))
+            edges.add((int(root), int(A[i,0]), 'c-c'))
             last = int(A[i,A.shape[1]-2])
             for j in range(0, A.shape[1]-2):
                 if A[i,j+1] == 0:
                     last = int(A[i,j])
                     break
                 else:
-                    edges.add((int(A[i,j]), int(A[i,j+1]), 't-t'))
-            edges.add((last, int(A[i,A.shape[1]-1]), 't-g'))
+                    edges.add((int(A[i,j]), int(A[i,j+1]), 'c-c'))
+            edges.add((last, int(A[i,A.shape[1]-1]), 'c-g'))
             
         if outdir[-1] in ["/","\\","\\"+"\\"]:
             outdir = outdir[:-1]
