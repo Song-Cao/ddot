@@ -3226,7 +3226,7 @@ class Ontology(object):
     # sourceNodeIDforEdge1    targetNodeIDforEdge1    edgeWeight(if any)
     # sourceNodeIDforEdge2    targetNodeIDforEdge2    edgeWeight(if any)
     #...
-    def run_louvain(cls, graph, outdir='.', config_model='Default', overlap=False, directed=False, interslice_weight=0.1, resolution_parameter=0.1):
+    def run_louvain(cls, graph, outdir='.', config_model='Default', overlap=False, directed=False, deep=True, interslice_weight=0.1, resolution_parameter=0.1):
         
         '''
         :outdir: the output directory to comprehend the output link file
@@ -3241,6 +3241,17 @@ class Ontology(object):
         
         # import Van Traag louvain package
         import louvain
+        
+        def louvain_hierarchy_output(partition):
+            optimiser = louvain.Optimiser()
+            partition_agg = partition.aggregate_partition()
+            partition_layers = []
+            while optimiser.move_nodes(partition_agg) > 0:
+                partition.from_coarse_partition(partition_agg)
+                partition_agg = partition_agg.aggregate_partition()
+                partition_layers.append(list(partition))
+            return partition_layers
+        
         
         def louvain_multiplex(graphs, partition_type, interslice_weight, resolution_parameter):
             layers, interslice_layer, G_full = louvain.time_slices_to_layers(graphs, vertex_id_attr='name', interslice_weight=interslice_weight)
@@ -3284,6 +3295,9 @@ class Ontology(object):
             graph = []
             for i in range(4):
                 graph.append(net)
+        
+        if multi == True and deep == True:
+            raise Exception('louvain does not support hierarchical clustering with overlapped communities')
             
         if config_model == 'RB':
             partition_type = louvain.RBConfigurationVertexPartition
@@ -3361,31 +3375,61 @@ class Ontology(object):
             else:
                 weights = G.es['weight']
             if partition_type == louvain.ModularityVertexPartition:
-                partition = louvain.find_partition(G,partition_type, weights=weights)
+                partition = partition_type(G, weights=weights)
             else:
-                partition = louvain.find_partition(G,partition_type, weights=weights, resolution_parameter = resolution_parameter)
-            optimiser = louvain.Optimiser()
-            optimiser.optimise_partition(partition)
+                partition = partition_type(G,weights=weights, resolution_parameter = resolution_parameter)
+            if deep == False:
+                optimiser = louvain.Optimiser()
+                optimiser.optimise_partition(partition)
             # quality = partition.quality()
-                
-        clusts = partition_to_clust(G, partition)
-        if len(clusts) == 0:
-            print("No cluster; Resolution parameter may be too extreme")
-            return
         
-        #maxNode = max(list(Node2Index.keys()))
-        maxNode = 0
-        for clust in clusts:
-            maxNode = max(maxNode, max(clust))
         if outdir[-1] in ["/","\\","\\"+"\\"]:
             outdir = outdir[:-1]
         wfile = open(outdir + '/tree.txt', 'w')
-        for i in range(len(clusts)):
-            wfile.write(str(maxNode+len(partition)+1) + '\t' + str(maxNode+i+1) + '\t' + 'c-c' + '\n')
-            for n in clusts[i]:
-                wfile.write(str(maxNode+i+1) + '\t' + str(n) + '\t' + 'c-g' + '\n')
+            
+        if deep == False:
+            clusts = partition_to_clust(G, partition)
+            if len(clusts) == 0:
+                print("No cluster; Resolution parameter may be too extreme")
+                return
+        
+            maxNode = 0
+            for clust in clusts:
+                maxNode = max(maxNode, max(clust))
+            
+            for i in range(len(clusts)):
+                wfile.write(str(maxNode+len(partition)+1) + '\t' + str(maxNode+i+1) + '\t' + 'c-c' + '\n')
+                for n in clusts[i]:
+                    wfile.write(str(maxNode+i+1) + '\t' + str(n) + '\t' + 'c-g' + '\n')
+        else:
+            print(partition)
+            partitions = louvain_hierarchy_output(partition)
+            print(partitions)
+            clusts_layers = []
+            for p in partitions:
+                clusts_layers.append(partition_to_clust(G, p))
+            print(clusts_layers)
+            if len(clusts_layers[0]) == 0:
+                print("No cluster; Resolution parameter may be too extreme")
+                return
+            maxNode = 0
+            for clust in clusts_layers[0]:
+                maxNode = max(maxNode, max(clust))
+            for i in range(len(clusts_layers[0])):
+                for n in clusts_layers[0][i]:
+                    wfile.write(str(maxNode+i+1) + '\t' + str(n) + '\t' + 'c-g' + '\n')
+            maxNode = maxNode + len(clusts_layers[0])
+            for i in range(1, len(clusts_layers)):
+                for j in range(len(clusts_layers[i-1])):
+                    for k in range(len(clusts_layers[i])):
+                        if all(x in clusts_layers[i][k] for x in clusts_layers[i-1][j]):
+                            wfile.write(str(maxNode+k+1) + '\t' + str(maxNode-len(clusts_layers[i-1])+j+1) + '\t' + 'c-c' + '\n')
+                            break
+                maxNode = maxNode + len(clusts_layers[i])
+            for i in range(len(clusts_layers[-1])):
+                wfile.write(str(maxNode+1) + '\t' + str(maxNode-len(clusts_layers[-1])+i+1) + '\t' + 'c-c' + '\n')
+            
         wfile.close()      
-    
         return
                           
                           
@@ -3515,6 +3559,7 @@ class Ontology(object):
         :return:
         '''
 
+    
         def louvain_multiplex(graphs, partition_type, interslice_weight=0.1, **kwargs):
             layers, interslice_layer, G_full = louvain.time_slices_to_layers(graphs, vertex_id_attr='name', interslice_weight=interslice_weight)
             partitions = [partition_type(H, **kwargs) for H in layers]
